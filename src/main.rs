@@ -13,7 +13,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Search transcripts (alias: g)
+    /// Search transcripts
     #[command(visible_alias = "g")]
     Grep {
         /// Search pattern (optional; omit to list recent turns)
@@ -52,7 +52,7 @@ enum Cmd {
         json: bool,
     },
 
-    /// Show a session (alias: s)
+    /// Show a session
     #[command(visible_alias = "s")]
     Show {
         /// Session ID (or prefix)
@@ -79,7 +79,7 @@ enum Cmd {
         json: bool,
     },
 
-    /// List sessions (alias: l)
+    /// List sessions
     #[command(visible_alias = "l")]
     Ls {
         /// Days to search back (default: 7)
@@ -95,7 +95,7 @@ enum Cmd {
         json: bool,
     },
 
-    /// Tool calls across sessions (alias: t)
+    /// Tool calls across sessions
     #[command(visible_alias = "t")]
     Tools {
         /// Days to search back (default: 2)
