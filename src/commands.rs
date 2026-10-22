@@ -25,10 +25,12 @@ pub fn cmd_ls(since: f64, limit: usize, json: bool) {
         println!("{:<4} {:<16} {:<16} {:<36} {}", "#", "LAST ACTIVE", "STARTED", "SESSION ID", "DIR");
         println!("{}", "─".repeat(110));
         for (i, s) in sessions.iter().enumerate() {
-            let active = s.mtime.format("%Y-%m-%d %H:%M");
-            let started = s.start_time.format("%Y-%m-%d %H:%M");
+            let active = local_dt(&s.mtime);
+            let started = local_dt(&s.start_time);
             println!("{:<4} {:<16} {:<16} {:<36} {}", i + 1, active, started, s.id, s.dir);
         }
+        println!();
+        println!("{}", tz_note());
     }
 }
 
@@ -103,8 +105,10 @@ pub fn cmd_grep(
         }
         let total = results.len();
         println!("{} match(es):\n", total);
+        println!("{}", tz_note());
+        println!();
         for (i, r) in results.iter().enumerate() {
-            let ts = r.timestamp.get(..16).unwrap_or(&r.timestamp);
+            let ts = local_ts(&r.timestamp, false);
             let sid_short = &r.session_id[..8.min(r.session_id.len())];
             let eid_short = &r.entry_id[..8.min(r.entry_id.len())];
             println!("[{}/{}] {} {} {} {}", i + 1, total, ts, sid_short, eid_short, r.role);
@@ -191,8 +195,10 @@ pub fn cmd_show(
         println!("Session: {}", session.id);
         println!("File: {}", session.path.to_string_lossy());
         println!("{} messages\n", results.len());
+        println!("{}", tz_note());
+        println!();
         for r in &results {
-            let ts = r.timestamp.get(..19).unwrap_or(&r.timestamp);
+            let ts = local_ts(&r.timestamp, true);
             println!("── {} [{}] {} ──", ts, &r.entry_id[..8.min(r.entry_id.len())], r.role);
             for line in r.text.lines() {
                 println!("  {}", line);
@@ -236,8 +242,10 @@ pub fn cmd_tools(
             return;
         }
         println!("{} tool call(s):\n", results.len());
+        println!("{}", tz_note());
+        println!();
         for (i, r) in results.iter().enumerate() {
-            let ts = r.timestamp.get(..16).unwrap_or(&r.timestamp);
+            let ts = local_ts(&r.timestamp, false);
             let sid_short = &r.session_id[..8.min(r.session_id.len())];
             let args_str = summarize_args(&r.arguments);
             println!("[{}/{}] {} {} {} {}", i + 1, results.len(), ts, sid_short, r.name, args_str);
@@ -287,8 +295,10 @@ pub fn cmd_compacts(
         return;
     }
     println!("{} compaction(s):\n", results.len());
+    println!("{}", tz_note());
+    println!();
     for (i, r) in results.iter().enumerate() {
-        let ts = r.timestamp.get(..16).unwrap_or(&r.timestamp);
+        let ts = local_ts(&r.timestamp, false);
         let sid_short = &r.session_id[..8.min(r.session_id.len())];
         let eid_short = &r.entry_id[..8.min(r.entry_id.len())];
         println!("[{}/{}] {} {} {}  tokens_before={}  summary={} chars",
@@ -365,16 +375,17 @@ pub fn cmd_last(
         println!(
             "Session: {}  last active {}  (started {})",
             session.id,
-            session.mtime.format("%Y-%m-%d %H:%M"),
-            session.start_time.format("%Y-%m-%d %H:%M")
+            local_dt(&session.mtime),
+            local_dt(&session.start_time)
         );
         if let Some(me) = &self_id {
             println!("(skipped current session {})", me);
         }
         println!("{} messages shown of {}", results.len(), total);
+        println!("{}", tz_note());
         println!();
         for r in results {
-            let ts = r.timestamp.get(..19).unwrap_or(&r.timestamp);
+            let ts = local_ts(&r.timestamp, true);
             println!("── {} [{}] {} ──", ts, &r.entry_id[..8.min(r.entry_id.len())], r.role);
             for line in r.text.lines() {
                 println!("  {}", line);

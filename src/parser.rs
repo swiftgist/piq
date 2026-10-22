@@ -1,5 +1,5 @@
 use crate::model::*;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -10,6 +10,57 @@ pub fn sessions_dir() -> PathBuf {
         .join(".pi")
         .join("agent")
         .join("sessions")
+}
+
+/// Human-facing timestamp: the entry's UTC ISO-8601 rendered in the machine's local zone.
+/// `with_seconds` keeps seconds for the dense per-message dumps (show/last); the one-line
+/// index views (ls/grep/tools/compacts) do not need them.
+pub fn local_ts(ts: &str, with_seconds: bool) -> String {
+    let width = if with_seconds { 19 } else { 16 };
+    match DateTime::parse_from_rfc3339(ts) {
+        Ok(t) => t
+            .with_timezone(&Local)
+            .format(if with_seconds { "%Y-%m-%d %H:%M:%S" } else { "%Y-%m-%d %H:%M" })
+            .to_string(),
+        // Unparseable timestamp: show what we have rather than nothing.
+        Err(_) => ts.get(..width).unwrap_or(ts).to_string(),
+    }
+}
+
+/// Render a UTC DateTime in the local zone for display.
+pub fn local_dt(t: &DateTime<Utc>) -> String {
+    t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
+}
+
+/// Which clock the printed timestamps are on. Printed once per command; `--json` output is
+/// deliberately left in UTC because it is meant to be parsed, not read.
+pub fn tz_note() -> String {
+    // chrono's %Z on a DateTime<Local> yields the numeric offset, not the zone abbreviation,
+    // so ask `date` for the same name the user's own shell prints. This also honours TZ if the
+    // user has overridden it. Falls back to the bare offset if the spawn fails.
+    let label = std::process::Command::new("date")
+        .arg("+%Z")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_alphabetic()))
+        .unwrap_or_else(|| "local".to_string());
+
+    // Offset comes from chrono, which is authoritative for the rendered timestamps themselves.
+    let mins = Local::now().offset().local_minus_utc() / 60;
+    let (sign, abs) = if mins < 0 { ('-', -mins) } else { ('+', mins) };
+    let hours = abs / 60;
+    let offset = if abs % 60 == 0 {
+        format!("UTC{}{}", sign, hours)
+    } else {
+        format!("UTC{}{:02}:{:02}", sign, hours, abs % 60)
+    };
+
+    format!(
+        "# timestamps local: {} ({})  |  --json stays UTC",
+        label, offset
+    )
 }
 
 /// Discover all session JSONL files, sorted by mtime (last activity) descending.
