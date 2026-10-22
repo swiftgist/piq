@@ -172,6 +172,15 @@ enum Cmd {
 }
 
 fn main() {
+    // Rust ignores SIGPIPE at startup, so the first println! to a pipe whose reader has gone
+    // away becomes a panic -- `failed printing to stdout: Broken pipe`, exit 101 -- instead of
+    // the quiet death every other CLI produces. Restore the default disposition so
+    // `piq ... | head` behaves like `cat ... | head`.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     let cli = Cli::parse();
     match cli.command {
         Cmd::Grep { pattern, user, assistant, tool, compaction, since, session, context, limit, json } => {
