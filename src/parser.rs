@@ -12,7 +12,9 @@ pub fn sessions_dir() -> PathBuf {
         .join("sessions")
 }
 
-/// Discover all session JSONL files, sorted by start_time descending.
+/// Discover all session JSONL files, sorted by mtime (last activity) descending.
+/// Ordering and the `since` window both use mtime rather than the filename timestamp:
+/// a resumed session keeps its original filename but is the most recent conversation.
 pub fn discover_sessions(since_days: Option<f64>) -> Vec<SessionFile> {
     let base = sessions_dir();
     let mut files = Vec::new();
@@ -52,9 +54,25 @@ pub fn discover_sessions(since_days: Option<f64>) -> Vec<SessionFile> {
                     .unwrap_or("unknown")
                     .to_string();
 
+                // mtime == when the last entry was appended. Falls back to start_time
+                // if the filesystem refuses to report it.
+                let mtime = path
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(DateTime::<Utc>::from)
+                    .unwrap_or(ts);
+
                 if let Some(days) = since_days {
-                    let age = Utc::now() - ts;
-                    if age.num_seconds() < 0 || (age.num_days() as f64) > days {
+                    let age = Utc::now() - mtime;
+                    // Allow a little clock skew before discarding a file as "from the
+                    // future"; dropping the newest session is the worst possible failure.
+                    if age.num_seconds() < -3600 {
+                        continue;
+                    }
+                    // num_days() truncates, so the old `age.num_days() > days` test let
+                    // -s 3 reach almost 4 days back. Compare real fractional age.
+                    if (age.num_seconds() as f64 / 86400.0) > days {
                         continue;
                     }
                 }
@@ -64,12 +82,13 @@ pub fn discover_sessions(since_days: Option<f64>) -> Vec<SessionFile> {
                     id,
                     dir: dir_name.clone(),
                     start_time: ts,
+                    mtime,
                 });
             }
         }
     }
 
-    files.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+    files.sort_by(|a, b| b.mtime.cmp(&a.mtime));
     files
 }
 
@@ -117,7 +136,7 @@ pub fn parse_session(
                     results.push(info);
                 }
             }
-            Entry::Compaction { id, timestamp, summary } => {
+            Entry::Compaction { id, timestamp, summary, .. } => {
                 // Treat compaction as an assistant message for search purposes
                 if filter.match_roles.contains(&Role::Compaction) {
                     if matches_pattern(&summary, pattern) {
@@ -309,6 +328,46 @@ pub fn extract_tool_calls(file: &SessionFile, name_filter: Option<&str>, file_pa
     }
 
     results
+}
+
+/// Extract compaction events (session summaries) across a session
+pub fn extract_compactions(file: &SessionFile) -> Vec<CompactionInfo> {
+    let f = match fs::File::open(&file.path) {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    let reader = BufReader::new(f);
+    let mut results = Vec::new();
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let entry: Entry = match serde_json::from_str(&line) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if let Entry::Compaction { id, timestamp, summary, tokens_before, first_kept_entry_id } = entry {
+            results.push(CompactionInfo {
+                session_id: file.id.clone(),
+                entry_id: id,
+                timestamp,
+                tokens_before,
+                first_kept_entry_id,
+                summary,
+            });
+        }
+    }
+    results
+}
+
+pub struct CompactionInfo {
+    pub session_id: String,
+    pub entry_id: String,
+    pub timestamp: String,
+    pub tokens_before: u64,
+    pub first_kept_entry_id: String,
+    pub summary: String,
 }
 
 pub struct ToolCallInfo {

@@ -11,19 +11,23 @@ pub fn cmd_ls(since: f64, limit: usize, json: bool) {
             "id": s.id,
             "dir": s.dir,
             "start_time": s.start_time.to_rfc3339(),
+            "mtime": s.mtime.to_rfc3339(),
             "path": s.path.to_string_lossy(),
         })).collect();
         println!("{}", serde_json::to_string_pretty(&items).unwrap());
     } else {
         if sessions.is_empty() {
-            println!("No sessions found in the last {:.0} days.", since);
+            println!("No sessions active in the last {:.0} days.", since);
             return;
         }
-        println!("{:<4} {:<12} {:<36} {}", "#", "DATE", "SESSION ID", "DIR");
-        println!("{}", "─".repeat(100));
+        // Ordered by last activity. STARTED is shown too so a session that was resumed
+        // days after it began is visible as such instead of looking stale.
+        println!("{:<4} {:<16} {:<16} {:<36} {}", "#", "LAST ACTIVE", "STARTED", "SESSION ID", "DIR");
+        println!("{}", "─".repeat(110));
         for (i, s) in sessions.iter().enumerate() {
-            let dt = s.start_time.format("%Y-%m-%d %H:%M");
-            println!("{:<4} {:<12} {:<36} {}", i + 1, dt, s.id, s.dir);
+            let active = s.mtime.format("%Y-%m-%d %H:%M");
+            let started = s.start_time.format("%Y-%m-%d %H:%M");
+            println!("{:<4} {:<16} {:<16} {:<36} {}", i + 1, active, started, s.id, s.dir);
         }
     }
 }
@@ -33,6 +37,7 @@ pub fn cmd_grep(
     user: bool,
     assistant: bool,
     tool: bool,
+    compaction: bool,
     since: f64,
     session_id: Option<&str>,
     context: usize,
@@ -40,8 +45,9 @@ pub fn cmd_grep(
     json: bool,
 ) {
     let mut roles = Vec::new();
-    // If no role flags, match all
-    if !user && !assistant && !tool {
+    // If no role flags, match all (compaction is opt-in: it would otherwise
+    // re-surface the same recent text the live conversation already has).
+    if !user && !assistant && !tool && !compaction {
         roles.push(Role::User);
         roles.push(Role::Assistant);
         roles.push(Role::Tool);
@@ -49,6 +55,7 @@ pub fn cmd_grep(
         if user { roles.push(Role::User); }
         if assistant { roles.push(Role::Assistant); }
         if tool { roles.push(Role::Tool); }
+        if compaction { roles.push(Role::Compaction); }
     }
 
     // If no pattern, show recent turns of the selected roles
@@ -238,6 +245,63 @@ pub fn cmd_tools(
     }
 }
 
+pub fn cmd_compacts(
+    since: f64,
+    session_id: Option<&str>,
+    show: bool,
+    limit: usize,
+    json: bool,
+) {
+    let sessions = if let Some(sid) = session_id {
+        discover_sessions(None)
+            .into_iter()
+            .filter(|s| s.id == sid || s.id.starts_with(sid))
+            .collect()
+    } else {
+        discover_sessions(Some(since))
+    };
+
+    let mut all: Vec<CompactionInfo> = Vec::new();
+    for s in &sessions {
+        all.extend(extract_compactions(s));
+        if all.len() >= limit {
+            break;
+        }
+    }
+    let results: Vec<_> = all.into_iter().take(limit).collect();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results.iter().map(|r| serde_json::json!({
+            "session_id": r.session_id,
+            "entry_id": r.entry_id,
+            "timestamp": r.timestamp,
+            "tokens_before": r.tokens_before,
+            "first_kept_entry_id": r.first_kept_entry_id,
+            "summary": r.summary,
+        })).collect::<Vec<_>>()).unwrap());
+        return;
+    }
+
+    if results.is_empty() {
+        println!("No compaction events found.");
+        return;
+    }
+    println!("{} compaction(s):\n", results.len());
+    for (i, r) in results.iter().enumerate() {
+        let ts = r.timestamp.get(..16).unwrap_or(&r.timestamp);
+        let sid_short = &r.session_id[..8.min(r.session_id.len())];
+        let eid_short = &r.entry_id[..8.min(r.entry_id.len())];
+        println!("[{}/{}] {} {} {}  tokens_before={}  summary={} chars",
+            i + 1, results.len(), ts, sid_short, eid_short, r.tokens_before, r.summary.chars().count());
+        if show {
+            for line in r.summary.lines() {
+                println!("  | {}", line);
+            }
+        }
+        println!();
+    }
+}
+
 pub fn cmd_last(
     user: bool,
     assistant: bool,
@@ -245,11 +309,28 @@ pub fn cmd_last(
     limit: usize,
     json: bool,
 ) {
+    // PI_SESSION_ID is exported only into the environment of a live pi session, so this
+    // skip fires when an agent runs piq and is inert for a human in a plain shell. The
+    // point is to make `last` mean the same thing for both: "the last conversation other
+    // than the one I am in", instead of depending on which of us invoked it.
+    let self_id = std::env::var("PI_SESSION_ID").ok();
+    let is_self = |s: &SessionFile| match &self_id {
+        Some(me) => s.id == *me || me.starts_with(&s.id) || s.id.starts_with(me),
+        None => false,
+    };
+
     let sessions = discover_sessions(Some(30.0)); // look back 30 days for last session
-    let session = match sessions.first() {
+    let session = match sessions.iter().find(|s| !is_self(s)) {
         Some(s) => s,
         None => {
-            eprintln!("No sessions found.");
+            if self_id.is_some() {
+                eprintln!(
+                    "Only session in range is the current one ({}).",
+                    self_id.unwrap()
+                );
+            } else {
+                eprintln!("No sessions found.");
+            }
             return;
         }
     };
@@ -266,6 +347,7 @@ pub fn cmd_last(
 
     let filter = Filter { match_roles: roles, context_lines: 0 };
     let results = parse_session(session, &filter, None);
+    let total = results.len();
 
     // Take last N
     let start = results.len().saturating_sub(limit);
@@ -280,7 +362,16 @@ pub fn cmd_last(
             "text": r.text,
         })).collect::<Vec<_>>()).unwrap());
     } else {
-        println!("Session: {} ({} messages shown of {})", session.id, results.len(), results.len());
+        println!(
+            "Session: {}  last active {}  (started {})",
+            session.id,
+            session.mtime.format("%Y-%m-%d %H:%M"),
+            session.start_time.format("%Y-%m-%d %H:%M")
+        );
+        if let Some(me) = &self_id {
+            println!("(skipped current session {})", me);
+        }
+        println!("{} messages shown of {}", results.len(), total);
         println!();
         for r in results {
             let ts = r.timestamp.get(..19).unwrap_or(&r.timestamp);

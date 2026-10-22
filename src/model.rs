@@ -7,6 +7,11 @@ pub struct SessionFile {
     pub id: String,
     pub dir: String,
     pub start_time: chrono::DateTime<chrono::Utc>,
+    /// Filesystem mtime, i.e. when this session was last written to.
+    /// Sessions are append-only and `pi --continue/--resume/--session` append to the
+    /// ORIGINAL file, so start_time (baked into the filename) never moves. A session
+    /// started 10-19 and used 10-21 would rank as 10-19 without this.
+    pub mtime: chrono::DateTime<chrono::Utc>,
 }
 
 /// One line from the JSONL stream
@@ -56,6 +61,10 @@ pub enum Entry {
         id: String,
         summary: String,
         timestamp: String,
+        #[serde(rename = "tokensBefore", default)]
+        tokens_before: u64,
+        #[serde(rename = "firstKeptEntryId", default)]
+        first_kept_entry_id: String,
     },
 }
 

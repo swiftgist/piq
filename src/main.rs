@@ -31,6 +31,10 @@ enum Cmd {
         #[arg(short = 't', long)]
         tool: bool,
 
+        /// Compaction summaries only
+        #[arg(long)]
+        compaction: bool,
+
         /// Days to search back (default: 2)
         #[arg(short = 's', long, default_value_t = 2.0)]
         since: f64,
@@ -79,10 +83,10 @@ enum Cmd {
         json: bool,
     },
 
-    /// List sessions
+    /// List sessions, ordered by last activity
     #[command(visible_alias = "l")]
     Ls {
-        /// Days to search back (default: 7)
+        /// Days to search back, measured from last activity (default: 7)
         #[arg(short = 's', long, default_value_t = 7.0)]
         since: f64,
 
@@ -119,7 +123,31 @@ enum Cmd {
         json: bool,
     },
 
-    /// Last N turns from the most recent session
+    /// List compaction/summary events (alias: c)
+    #[command(visible_alias = "c")]
+    Compacts {
+        /// Days to search back (default: 7)
+        #[arg(short = 's', long, default_value_t = 7.0)]
+        since: f64,
+
+        /// Restrict to one session (prefix match)
+        #[arg(short = 'S', long)]
+        session: Option<String>,
+
+        /// Print the full summary text for each event
+        #[arg(long)]
+        show: bool,
+
+        /// Max results (default: 30)
+        #[arg(short = 'l', long, default_value_t = 30)]
+        limit: usize,
+
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Last N turns from the most recent session, skipping the session piq is running inside
     Last {
         /// User turns only
         #[arg(short = 'u', long)]
@@ -146,10 +174,10 @@ enum Cmd {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::Grep { pattern, user, assistant, tool, since, session, context, limit, json } => {
+        Cmd::Grep { pattern, user, assistant, tool, compaction, since, session, context, limit, json } => {
             commands::cmd_grep(
                 pattern.as_deref(),
-                user, assistant, tool,
+                user, assistant, tool, compaction,
                 since,
                 session.as_deref(),
                 context, limit, json,
@@ -172,6 +200,13 @@ fn main() {
                 name.as_deref(),
                 file.as_deref(),
                 limit, json,
+            );
+        }
+        Cmd::Compacts { since, session, show, limit, json } => {
+            commands::cmd_compacts(
+                since,
+                session.as_deref(),
+                show, limit, json,
             );
         }
         Cmd::Last { user, assistant, tool, limit, json } => {
