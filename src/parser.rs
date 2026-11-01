@@ -299,11 +299,12 @@ fn extract_message(
             let matches_text = matches_pattern(&text, pattern);
 
             if matches_name || matches_text {
-                // Truncate tool result content in output
-                let display_text = if text.len() > 200 {
-                    format!("{}... [truncated]", &text[..200])
-                } else {
-                    text
+                // Truncate tool result content in output. Slice on a character boundary:
+                // `&text[..200]` panics when byte 200 lands inside a multi-byte character
+                // (em dash, smart quote, accent), which is common in transcript text.
+                let display_text = match text.char_indices().nth(200) {
+                    Some((i, _)) => format!("{}... [truncated]", &text[..i]),
+                    None => text,
                 };
                 Some(MessageInfo {
                     session_id: session_id.to_string(),

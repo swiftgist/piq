@@ -418,9 +418,9 @@ fn summarize_args(args: &Option<serde_json::Value>) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
+    // Cut on a character boundary, not a byte offset — `&s[..max]` panics mid-character.
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
     }
 }
